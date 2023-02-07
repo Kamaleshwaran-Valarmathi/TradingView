@@ -1,0 +1,47 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © kamalesh6174
+
+// @version=4
+strategy("Renko Trend Detector Strategy", shorttitle="RTDS", overlay=true, slippage=10, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// Get user input
+var positionSizeArr     = array.new_float(2)    // positionSizeArr: 0th index represents last trades position size, 1st index represents current trades position size
+trendReversalBrickCount = input(title="Trade Exit Brick Count", type=input.integer, defval=1, minval=1, maxval=5, tooltip="At what number of bricks do you think the trend is reversed?")
+startDate               = input(title="Start Date", type=input.integer, defval=1, minval=1, maxval=31)
+startMonth              = input(title="Start Month", type=input.integer, defval=1, minval=1, maxval=12)
+startYear               = input(title="Start Year", type=input.integer, defval=2021, minval=1800, maxval=2100)
+endDate                 = input(title="End Date", type=input.integer, defval=1, minval=1, maxval=31)
+endMonth                = input(title="End Month", type=input.integer, defval=8, minval=1, maxval=12)
+endYear                 = input(title="End Year", type=input.integer, defval=2021, minval=1800, maxval=2100)
+
+// Look if the close time of the current bar falls inside the date range
+inDateRange = (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 0, 0, 0)) and (time < timestamp(syminfo.timezone, endYear, endMonth, endDate, 0, 0, 0))
+// inDateRange = (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 0, 0))
+
+// Calculate brick size
+brickSize = abs(open - close)
+
+// Check if we have confirmation for our setup
+validLong = inDateRange and (strategy.position_size <= 0) and (not na(close[1])) and (barstate.isconfirmed) and (close >= (close[1] + ((trendReversalBrickCount + 1) * brickSize)))
+validShort = inDateRange and (strategy.position_size >= 0) and (not na(close[1])) and (barstate.isconfirmed) and (close <= (close[1] - ((trendReversalBrickCount + 1) * brickSize)))
+
+// Use the following code snippet if you want to calculate position size based on your current portfolio size
+if validLong or validShort
+    curPortfolioSize = strategy.equity < 1e8 ? strategy.equity : 1e8
+    curPosSize_temp = ((curPortfolioSize * 0.95) / close)   // if you don't want to trade fractional shares, then add floor to this
+    array.set(positionSizeArr, 0, array.get(positionSizeArr, 1))
+    array.set(positionSizeArr, 1, curPosSize_temp > float(1e9) ? float(1e9) : curPosSize_temp)
+
+// Enter trades whenever a valid setup is detected
+strategy.entry(id="Long", long=strategy.long, qty=array.get(positionSizeArr, 1), when=validLong)
+strategy.entry(id="Short", long=strategy.short, qty=array.get(positionSizeArr, 1), when=validShort)
+
+// Exit trades whenever our stop or target is hit
+strategy.close(id="Long Exit", when=validShort and strategy.position_size > 0, qty=array.get(positionSizeArr, 0))
+strategy.close(id="Short Exit", when=validLong and strategy.position_size < 0, qty=array.get(positionSizeArr, 0))
+
+// Draw price action setup arrows
+plotshape(validLong ? -strategy.position_size : na, style=shape.triangleup, location=location.belowbar, color=color.green, title="Bullish Setup")
+plotshape(validShort ? -strategy.position_size : na, style=shape.triangledown, location=location.abovebar, color=color.red, title="Bearish Setup")
+
+plot(strategy.equity, color=color.black)

@@ -1,0 +1,66 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © kamalesh6174
+
+// @version=4
+strategy("Renko Trend Detector Strategy - Candle Stick Charts", shorttitle="RTDS - Candles", overlay=true, slippage=10, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// Get user input
+var positionSizeArr     = array.new_float(2)    // positionSizeArr: 0th index represents last trades position size, 1st index represents current trades position size
+trendReversalBrickCount = input(title="Trade Exit Brick Count", type=input.integer, defval=1, minval=1, maxval=5, tooltip="At what number of bricks do you think the trend is reversed?")
+startDate               = input(title="Start Date", type=input.integer, defval=1, minval=1, maxval=31)
+startMonth              = input(title="Start Month", type=input.integer, defval=1, minval=1, maxval=12)
+startYear               = input(title="Start Year", type=input.integer, defval=2021, minval=1800, maxval=2100)
+var endTimeFlag         = input(title="Include End Time", type=input.bool, defval=false, tooltip="Include end time or not?")
+endDate                 = input(title="End Date", type=input.integer, defval=1, minval=1, maxval=31)
+endMonth                = input(title="End Month", type=input.integer, defval=8, minval=1, maxval=12)
+endYear                 = input(title="End Year", type=input.integer, defval=2021, minval=1800, maxval=2100)
+inDateRange             = false
+var brickSize           = 0.1
+var prevBrickClosePrice = 0.0
+var prevBrickDir        = 0    // Save the previous brick's direction (i.e., 1 -> long, -1 -> short, 0 -> undefined [first brick's direction cannot be calculated])
+
+// Look if the close time of the current bar falls inside the date range
+if endTimeFlag
+    inDateRange := (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 0, 0, 0)) and (time < timestamp(syminfo.timezone, endYear, endMonth, endDate, 0, 0, 0))
+if not endTimeFlag
+    inDateRange := (time >= timestamp(syminfo.timezone, startYear, startMonth, startDate, 0, 0, 0))
+
+// Setting first brick's close price and direction
+if (prevBrickClosePrice == 0.0) and (inDateRange) and (barstate.isconfirmed)
+    prevBrickClosePrice := close
+if (prevBrickDir == 0) and (prevBrickClosePrice != 0.0) and ((prevBrickClosePrice - close) >= brickSize)
+    prevBrickDir := -1
+if (prevBrickDir == 0) and (prevBrickClosePrice != 0.0) and ((close - prevBrickClosePrice) >= brickSize)
+    prevBrickDir := 1
+
+// Check if we have entry signal
+validLong = (inDateRange) and (strategy.position_size <= 0) and (prevBrickDir == -1) and (barstate.isconfirmed) and (close >= (prevBrickClosePrice + ((trendReversalBrickCount + 1) * brickSize)))
+validShort = (inDateRange) and (strategy.position_size >= 0) and (prevBrickDir == 1) and (barstate.isconfirmed) and (close <= (prevBrickClosePrice - ((trendReversalBrickCount + 1) * brickSize)))
+
+// Calculate the previous brick's close price
+if (((prevBrickClosePrice - close) >= brickSize) and (prevBrickDir == -1)) or (((close - prevBrickClosePrice) >= brickSize) and (prevBrickDir == 1))
+    prevBrickClosePrice := close
+
+// Use the following code snippet if you want to calculate position size based on your current portfolio size
+if validLong or validShort
+    curPortfolioSize = strategy.equity < 1e8 ? strategy.equity : 1e8
+    curPosSize_temp = ((curPortfolioSize * 0.95) / close)
+    array.set(positionSizeArr, 0, array.get(positionSizeArr, 1))
+    array.set(positionSizeArr, 1, curPosSize_temp > float(1e9) ? float(1e9) : curPosSize_temp)
+    prevBrickClosePrice := close
+    prevBrickDir := (prevBrickDir == 1) ? -1 : 1
+
+// Enter trades whenever a valid setup is detected
+strategy.entry(id="Long", long=strategy.long, qty=array.get(positionSizeArr, 1), when=validLong)
+strategy.entry(id="Short", long=strategy.short, qty=array.get(positionSizeArr, 1), when=validShort)
+
+// Exit trades whenever our stop or target is hit
+strategy.close(id="Long Exit", when=validShort and strategy.position_size > 0, qty=array.get(positionSizeArr, 0))
+strategy.close(id="Short Exit", when=validLong and strategy.position_size < 0, qty=array.get(positionSizeArr, 0))
+
+// Draw price action setup arrows
+plotshape(validLong ? -strategy.position_size : na, style=shape.triangleup, location=location.belowbar, color=color.green, title="Bullish Setup", size=size.small)
+plotshape(validShort ? -strategy.position_size : na, style=shape.triangledown, location=location.abovebar, color=color.red, title="Bearish Setup", size=size.small)
+
+// Draw renko chart
+plot(prevBrickClosePrice, linewidth=2, color=color.black, style=plot.style_stepline, title="Renko Chart")
